@@ -1,6 +1,6 @@
 ## Overview
 
-`deploy-operator.sh` mirrors an operator from Brew to your internal registry, builds and pushes an index image, creates a custom CatalogSource, and installs the operator via OLM on your OpenShift cluster.
+`deploy-operator.sh` mirrors an operator from Brew to your internal registry, builds and pushes an index image, creates a custom CatalogSource, and installs the operator via OLM on your OpenShift cluster. This script supports only 4 operators: sriov-operator, metallb-operator, ptp-operator and nmstate-operator
 
 ## Prerequisites
 
