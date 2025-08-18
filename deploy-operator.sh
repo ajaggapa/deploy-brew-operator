@@ -40,15 +40,15 @@ OPERATOR_MANIFESTS_DIR="operator-bundle-$(generate_random_name)"
 
 # Function to display usage information
 usage() {
-    echo "Usage: $0 --version <operator_version> --operator <sriov|metallb|ptp|nmstate> --operator-ns <namespace> --internal-registry <registry_url> --internal-registry-auth <auth_file_path> [--build-name <brew_build_name>]"
-    echo "  --version             : The operator version (e.g., v4.20). Mandatory."
+    echo "Usage: $0 --operator <sriov|metallb|ptp|nmstate> --operator-ns <namespace> --internal-registry <registry_url> --internal-registry-auth <auth_file_path> [--version <operator_version> | --build-name <brew_build_name>]"
     echo "  --operator            : One of: sriov, metallb, ptp, nmstate. Mandatory."
     echo "  --operator-ns         : Namespace to install the operator into (e.g., openshift-sriov-network-operator). Mandatory."
     echo "  --internal-registry   : The URL of your internal image registry (e.g., registry.hlxcl14.lab.eng.tlv2.redhat.com:5000). Mandatory."
     echo "  --internal-registry-auth: The path to the podman/OpenShift authentication file for the registry (e.g., ~/.docker/config.json). Mandatory."
-    echo "  --build-name          : Optional. The exact Brew build name. If provided, this will be used instead of auto-detecting the latest build for the specified version."
-    echo "Example: $0 --version v4.9 --operator sriov --operator-ns openshift-sriov-network-operator --internal-registry registry.example.com:5000 --internal-registry-auth ~/.docker/config.json"
-    echo "Example with build name: $0 --version v4.9 --operator sriov --operator-ns openshift-sriov-network-operator --internal-registry registry.example.com:5000 --internal-registry-auth ~/.docker/config.json --build-name sriov-network-operator-metadata-container-v4.9.0.202112142229.p0.gbfeaa5b.assembly.stream-1"
+    echo "  --version             : Optional if --build-name is provided. Version to search for in Brew builds (e.g., v4.20)."
+    echo "  --build-name          : Optional. Exact Brew build name. If provided, it is used and --version is ignored."
+    echo "Example: $0 --version v4.20 --operator sriov --operator-ns openshift-sriov-network-operator --internal-registry registry.example.com:5000 --internal-registry-auth ~/.docker/config.json"
+    echo "Example with build name: $0 --operator sriov --operator-ns openshift-sriov-network-operator --internal-registry registry.example.com:5000 --internal-registry-auth ~/.docker/config.json --build-name sriov-network-operator-metadata-container-v4.20.0.202112142229.p0.gbfeaa5b.assembly.stream-1"
     exit 1
 }
 
@@ -125,8 +125,8 @@ case "${OPERATOR_NAME}" in
 esac
 
 # Validate that all mandatory arguments are provided
-if [ -z "${OPERATOR_VERSION_SEARCH}" ]; then
-    echo "Error: --version argument is required."
+if [ -z "${OPERATOR_VERSION_SEARCH}" ] && [ -z "${BUILD_NAME}" ]; then
+    echo "Error: either --version or --build-name must be provided."
     usage
 fi
 if [ -z "${OPERATOR_NAME}" ]; then
@@ -142,7 +142,11 @@ if [ -z "${INTERNAL_REGISTRY_AUTH_FILE}" ]; then
     usage
 fi
 
-echo "Attempting to install ${OPERATOR_NAME} operator of version ${OPERATOR_VERSION_SEARCH} on namespace ${OPERATOR_NAMESPACE} "
+if [ -n "${BUILD_NAME}" ]; then
+    echo "Attempting to install ${OPERATOR_NAME} operator using build ${BUILD_NAME} on namespace ${OPERATOR_NAMESPACE} "
+else
+    echo "Attempting to install ${OPERATOR_NAME} operator of version ${OPERATOR_VERSION_SEARCH} on namespace ${OPERATOR_NAMESPACE} "
+fi
 echo "Using internal registry: ${INTERNAL_REGISTRY_URL}"
 echo "Using internal registry authentication file: ${INTERNAL_REGISTRY_AUTH_FILE}"
 echo "Resolved operator package: ${OPERATOR_PACKAGE_NAME}"
