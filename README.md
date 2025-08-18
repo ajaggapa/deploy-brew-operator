@@ -34,7 +34,7 @@ Operator mapping:
 - nmstate → brew: `ose-kubernetes-nmstate-operator-bundle-container`, OLM: `kubernetes-nmstate-operator`, ns: `openshift-nmstate`
 
 ## Examples
-
+## Option 1: Installing Latest bundle based on the version provided
 ### sriov
 ```bash
 KUBECONFIG=/home/kni/clusterconfigs/auth/kubeconfig \
@@ -75,7 +75,7 @@ KUBECONFIG=/home/kni/clusterconfigs/auth/kubeconfig \
   --version v4.20
 ```
 
-### Using --build-name (overrides/ignores --version)
+## Option 2: Using --build-name (overrides/ignores --version)
 
 Discover a recent build name from Brew (example for sriov):
 ```bash
@@ -84,32 +84,36 @@ brew list-builds --package=sriov-network-operator-metadata-container --state=COM
 
 Run with a specific build name:
 
+### sriov
 ```bash
-# sriov (tested example)
 KUBECONFIG=/home/kni/clusterconfigs/auth/kubeconfig \
 ./deploy-operator.sh \
   --internal-registry registry.hlxcl14.lab.eng.tlv2.redhat.com:5000 \
   --internal-registry-auth /home/kni/combined-secret.json \
   --operator sriov \
   --build-name sriov-network-operator-metadata-container-v4.20.0.202506231645.p0.g061a63d.assembly.stream.el9-2
+```
 
-# metallb (replace with a real build name from Brew)
+### metallb (replace with a real build name from Brew)
+```bash
 KUBECONFIG=/home/kni/clusterconfigs/auth/kubeconfig \
 ./deploy-operator.sh \
   --internal-registry registry.hlxcl14.lab.eng.tlv2.redhat.com:5000 \
   --internal-registry-auth /home/kni/combined-secret.json \
   --operator metallb \
   --build-name ose-metallb-operator-bundle-container-<build>
-
-# nmstate (replace with a real build name from Brew)
+```
+### nmstate (replace with a real build name from Brew)
+```bash
 KUBECONFIG=/home/kni/clusterconfigs/auth/kubeconfig \
 ./deploy-operator.sh \
   --internal-registry registry.hlxcl14.lab.eng.tlv2.redhat.com:5000 \
   --internal-registry-auth /home/kni/combined-secret.json \
   --operator nmstate \
   --build-name ose-kubernetes-nmstate-operator-bundle-container-<build>
-
-# ptp (replace with a real build name from Brew)
+```
+### ptp (replace with a real build name from Brew)
+```bash
 KUBECONFIG=/home/kni/clusterconfigs/auth/kubeconfig \
 ./deploy-operator.sh \
   --internal-registry registry.hlxcl14.lab.eng.tlv2.redhat.com:5000 \
@@ -144,5 +148,3 @@ oc get pods -n <operator-namespace>
 - Confirm registry reachability and credentials
 - If runs are slow after ImageContentSourcePolicy, wait for MCP to finish updating
 - The script prints each command (`set -x`) to aid debugging
-
-
