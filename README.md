@@ -1,6 +1,6 @@
 ## Overview
 
-`deploy-operator.sh` mirrors an operator from Brew to your internal registry, builds and pushes an index image, creates a custom CatalogSource, and installs the operator via OLM on your OpenShift cluster. This script supports only 4 operators: sriov-operator, metallb-operator, ptp-operator and nmstate-operator
+`deploy-operator.sh` mirrors an operator from Brew to your internal registry, builds and pushes an index image, creates a custom CatalogSource, and installs the operator via OLM on your OpenShift cluster.
 
 ## Prerequisites
 
@@ -20,11 +20,11 @@ KUBECONFIG=<path/to/kubeconfig> ./deploy-operator.sh \
   --internal-registry <host:port> \
   --internal-registry-auth <path/to/auth.json> \
   --operator <sriov|metallb|ptp|nmstate> \
-  --version <vX.Y>
+  [ --version <vX.Y> | --build-name <brew_build_name> ]
 ```
 
 Optional flags:
-- `--build-name <brew_build_name>`: use a specific Brew build instead of auto-selecting by version
+- `--build-name <brew_build_name>`: use a specific Brew build instead of auto-selecting by version (if provided, `--version` is ignored)
 - `--operator-ns <namespace>`: override the default namespace (normally auto-set per operator)
 
 Operator mapping:
@@ -73,6 +73,49 @@ KUBECONFIG=/home/kni/clusterconfigs/auth/kubeconfig \
   --internal-registry-auth /home/kni/combined-secret.json \
   --operator ptp \
   --version v4.20
+```
+
+### Using --build-name (overrides/ignores --version)
+
+Discover a recent build name from Brew (example for sriov):
+```bash
+brew list-builds --package=sriov-network-operator-metadata-container --state=COMPLETE --quiet --reverse | head -1
+```
+
+Run with a specific build name:
+
+```bash
+# sriov (tested example)
+KUBECONFIG=/home/kni/clusterconfigs/auth/kubeconfig \
+./deploy-operator.sh \
+  --internal-registry registry.hlxcl14.lab.eng.tlv2.redhat.com:5000 \
+  --internal-registry-auth /home/kni/combined-secret.json \
+  --operator sriov \
+  --build-name sriov-network-operator-metadata-container-v4.20.0.202506231645.p0.g061a63d.assembly.stream.el9-2
+
+# metallb (replace with a real build name from Brew)
+KUBECONFIG=/home/kni/clusterconfigs/auth/kubeconfig \
+./deploy-operator.sh \
+  --internal-registry registry.hlxcl14.lab.eng.tlv2.redhat.com:5000 \
+  --internal-registry-auth /home/kni/combined-secret.json \
+  --operator metallb \
+  --build-name ose-metallb-operator-bundle-container-<build>
+
+# nmstate (replace with a real build name from Brew)
+KUBECONFIG=/home/kni/clusterconfigs/auth/kubeconfig \
+./deploy-operator.sh \
+  --internal-registry registry.hlxcl14.lab.eng.tlv2.redhat.com:5000 \
+  --internal-registry-auth /home/kni/combined-secret.json \
+  --operator nmstate \
+  --build-name ose-kubernetes-nmstate-operator-bundle-container-<build>
+
+# ptp (replace with a real build name from Brew)
+KUBECONFIG=/home/kni/clusterconfigs/auth/kubeconfig \
+./deploy-operator.sh \
+  --internal-registry registry.hlxcl14.lab.eng.tlv2.redhat.com:5000 \
+  --internal-registry-auth /home/kni/combined-secret.json \
+  --operator ptp \
+  --build-name ose-ptp-operator-metadata-container-<build>
 ```
 
 ## What the script does
