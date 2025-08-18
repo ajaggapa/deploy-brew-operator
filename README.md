@@ -77,9 +77,9 @@ KUBECONFIG=/home/kni/clusterconfigs/auth/kubeconfig \
 
 ## Option 2: Using --build-name (overrides/ignores --version)
 
-Discover a recent build name from Brew (example for sriov):
+Discover a build name from Brew (example for sriov):
 ```bash
-brew list-builds --package=sriov-network-operator-metadata-container --state=COMPLETE --quiet --reverse | head -1
+brew list-builds --package=sriov-network-operator-metadata-container --state=COMPLETE --quiet --reverse
 ```
 
 Run with a specific build name:
