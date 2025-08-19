@@ -281,7 +281,8 @@ sleep 30
 
 echo "Waiting for 10 minutes for cluster nodes to restart after applying ImageContentSourcePolicy..."
 if ! oc wait --for=condition=Updating=False --timeout=10m mcp --all; then
-    echo "Warning: CatalogSource pod did not become ready in time. Check 'oc get pods -n openshift-marketplace | grep internal'." 
+    echo "Error: All nodes are not Updated as per MCP. Check 'oc get mcp'"
+    exit 1
 fi
 echo ""
 
