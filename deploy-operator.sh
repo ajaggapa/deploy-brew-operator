@@ -185,7 +185,7 @@ fi
 
 echo "Using Brew build: ${BREW_BUILD_TO_USE}"
 
-OPERATOR_BUNDLE_IMAGE=$(brew --noauth call --json getBuild buildInfo="${BREW_BUILD_TO_USE}" 2>/dev/null | jq -r '.extra.image.index.pull[0]')
+OPERATOR_BUNDLE_IMAGE=$(brew --noauth call --json-output getBuild buildInfo="${BREW_BUILD_TO_USE}" 2>/dev/null | jq -r '.extra.image.index.pull[0]')
 
 if [ -z "$OPERATOR_BUNDLE_IMAGE" ] || [[ "$OPERATOR_BUNDLE_IMAGE" == "null" ]]; then
     echo "Error: Could not extract the operator bundle image link from Brew build '${BREW_BUILD_TO_USE}'. Exiting."
