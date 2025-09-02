@@ -378,6 +378,93 @@ fi
 echo "OperatorGroup created/ensured."
 echo ""
 
+# Function to monitor subscription health and handle common issues
+monitor_subscription_health() {
+    local subscription_name="$1"
+    local namespace="$2"
+    local timeout_seconds="${3:-120}"
+    local deadline=$((SECONDS + timeout_seconds))
+    
+    echo "Monitoring subscription health for ${subscription_name} in namespace ${namespace}..."
+    
+    while [ ${SECONDS} -lt ${deadline} ]; do
+        # Get subscription status
+        local sub_status=$(oc get subscription "${subscription_name}" -n "${namespace}" -o jsonpath='{.status}' 2>/dev/null || echo '{}')
+        
+        # Check for ResolutionFailed condition
+        local resolution_failed=$(echo "${sub_status}" | jq -r '.conditions[]? | select(.type=="ResolutionFailed") | .status' 2>/dev/null || echo "")
+        local resolution_message=$(echo "${sub_status}" | jq -r '.conditions[]? | select(.type=="ResolutionFailed") | .message' 2>/dev/null || echo "")
+        
+        # Check for CatalogSourcesUnhealthy condition
+        local catalog_unhealthy=$(echo "${sub_status}" | jq -r '.conditions[]? | select(.type=="CatalogSourcesUnhealthy") | .status' 2>/dev/null || echo "")
+        
+        # Check if subscription has currentCSV (indicates successful resolution)
+        local current_csv=$(echo "${sub_status}" | jq -r '.currentCSV // empty' 2>/dev/null)
+        
+        if [ "${resolution_failed}" = "True" ]; then
+            echo "⚠️  Subscription resolution failed: ${resolution_message}"
+            
+            # Try to identify and fix problematic catalog sources
+            echo "Attempting to identify and remove problematic catalog sources..."
+            
+            # Extract problematic catalog source names from error message
+            local problematic_catalogs=$(echo "${resolution_message}" | grep -oE "openshift-marketplace/[a-zA-Z0-9-]+" | sed 's|openshift-marketplace/||g' | sort -u)
+            
+            if [ -n "${problematic_catalogs}" ]; then
+                echo "Found problematic catalog sources: ${problematic_catalogs}"
+                
+                for catalog in ${problematic_catalogs}; do
+                    # Skip our own catalog source
+                    if [ "${catalog}" != "catalog-${OPERATOR_NAME}" ]; then
+                        echo "Checking catalog source: ${catalog}"
+                        
+                        # Check if catalog source pods are failing
+                        local catalog_pod_status=$(oc get pods -n openshift-marketplace -l "olm.catalogSource=${catalog}" -o jsonpath='{.items[*].status.phase}' 2>/dev/null || echo "")
+                        
+                        if [[ "${catalog_pod_status}" == *"Failed"* ]] || [[ "${catalog_pod_status}" == *"Pending"* ]] || [ -z "${catalog_pod_status}" ]; then
+                            echo "⚠️  Catalog source ${catalog} appears problematic (pod status: ${catalog_pod_status:-"not found"})"
+                            echo "Removing problematic catalog source: ${catalog}"
+                            
+                            if oc delete catalogsource "${catalog}" -n openshift-marketplace --timeout=30s; then
+                                echo "✅ Successfully removed catalog source: ${catalog}"
+                            else
+                                echo "⚠️  Failed to remove catalog source: ${catalog}"
+                            fi
+                        fi
+                    fi
+                done
+                
+                echo "Waiting 10 seconds for OLM to refresh after catalog source changes..."
+                sleep 10
+                continue # Restart the monitoring loop
+            fi
+        fi
+        
+        if [ "${catalog_unhealthy}" = "True" ]; then
+            echo "⚠️  Some catalog sources are unhealthy, but continuing to monitor..."
+        fi
+        
+        if [ -n "${current_csv}" ]; then
+            echo "✅ Subscription successfully resolved. Current CSV: ${current_csv}"
+            return 0
+        fi
+        
+        # Check if bundle is unpacking
+        local bundle_unpacking=$(echo "${sub_status}" | jq -r '.conditions[]? | select(.type=="BundleUnpacking") | .status' 2>/dev/null || echo "")
+        if [ "${bundle_unpacking}" = "True" ]; then
+            echo "📦 Bundle unpacking in progress..."
+        fi
+        
+        echo "⏳ Subscription not yet resolved, checking again in 5 seconds..."
+        sleep 5
+    done
+    
+    echo "❌ Subscription monitoring timed out after ${timeout_seconds} seconds"
+    echo "Subscription status:"
+    oc get subscription "${subscription_name}" -n "${namespace}" -o yaml | grep -A 20 "status:" || true
+    return 1
+}
+
 # Step 15: Deploy Subscription
 echo "Step 15: Deploying Subscription to internal registry..."
 # Snapshot existing CSVs in namespace to detect a newly created one
@@ -399,37 +486,102 @@ if [ "${PIPESTATUS[1]}" -ne 0 ]; then
     exit 1
 fi
 echo "Subscription created."
-echo "Waiting for operator CSV to be installed and running..."
-# Wait for a newly created CSV (not present before Subscription) and then for it to reach Succeeded
-echo "Waiting up to 60s for a NEW CSV to be created in ${OPERATOR_NAMESPACE}..."
-NEW_CSV_NAME=""
-CSV_CREATE_DEADLINE=$((SECONDS+60))
-while [ ${SECONDS} -lt ${CSV_CREATE_DEADLINE} ]; do
-    current_csvs=$(oc get csv -n "${OPERATOR_NAMESPACE}" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null || true)
-    for name in ${current_csvs}; do
-        case " ${existing_csvs} " in
-            *" ${name} "*) ;; # existed before
-            *) NEW_CSV_NAME="${name}"; break ;;
-        esac
-    done
-    [ -n "${NEW_CSV_NAME}" ] && break
-    sleep 2
-done
 
-if [ -n "${NEW_CSV_NAME}" ]; then
-    echo "Detected new CSV: ${NEW_CSV_NAME}. Waiting for phase Succeeded (120s timeout)..."
-    if ! oc wait --for=jsonpath='{.status.phase}'=Succeeded "csv/${NEW_CSV_NAME}" -n "${OPERATOR_NAMESPACE}" --timeout=120s; then
-        echo "Warning: CSV ${NEW_CSV_NAME} did not reach 'Succeeded' phase in time. Check 'oc get csv ${NEW_CSV_NAME} -n ${OPERATOR_NAMESPACE} -o yaml'."
+# Step 15a: Monitor subscription health before proceeding to CSV
+echo "Step 15a: Monitoring subscription health and resolving any issues..."
+if ! monitor_subscription_health "subscription-${OPERATOR_NAME}" "${OPERATOR_NAMESPACE}" 180; then
+    echo "❌ Subscription failed to become healthy. Checking current state for diagnostics..."
+    echo "Subscription details:"
+    oc get subscription "subscription-${OPERATOR_NAME}" -n "${OPERATOR_NAMESPACE}" -o yaml
+    echo "Catalog sources:"
+    oc get catalogsource -n openshift-marketplace
+    echo "Package manifests:"
+    oc get packagemanifest -n openshift-marketplace | grep "${OPERATOR_NAME}" || true
+    exit 1
+fi
+
+# Step 15b: Wait for CSV creation and success
+echo "Step 15b: Waiting for operator CSV to be installed and running..."
+
+# Get the current CSV from the subscription (it should be set now)
+CURRENT_CSV=$(oc get subscription "subscription-${OPERATOR_NAME}" -n "${OPERATOR_NAMESPACE}" -o jsonpath='{.status.currentCSV}' 2>/dev/null || echo "")
+
+if [ -n "${CURRENT_CSV}" ]; then
+    echo "Subscription resolved to CSV: ${CURRENT_CSV}"
+    echo "Waiting for CSV ${CURRENT_CSV} to reach Succeeded state..."
+    
+    if ! oc wait --for=jsonpath='{.status.phase}'=Succeeded "csv/${CURRENT_CSV}" -n "${OPERATOR_NAMESPACE}" --timeout=180s; then
+        echo "⚠️  CSV ${CURRENT_CSV} did not reach 'Succeeded' phase in time."
+        echo "CSV status:"
+        oc get csv "${CURRENT_CSV}" -n "${OPERATOR_NAMESPACE}" -o yaml | grep -A 30 "status:" || true
+        echo "Checking for installation issues..."
+    else
+        echo "✅ CSV ${CURRENT_CSV} successfully reached Succeeded state!"
     fi
 else
-    echo "Warning: No new CSV detected within 60s. Proceeding to wait on any CSV in namespace."
-    if ! oc wait --for=jsonpath='{.status.phase}'=Succeeded csv --all -n "${OPERATOR_NAMESPACE}" --timeout=120s; then
-        echo "Warning: No CSV reached 'Succeeded' phase in time. Check 'oc get csv -n ${OPERATOR_NAMESPACE}'."
+    echo "⚠️  No currentCSV found in subscription. Falling back to detecting any new CSV..."
+    # Fallback: Wait for a newly created CSV (not present before Subscription)
+    echo "Waiting up to 60s for a NEW CSV to be created in ${OPERATOR_NAMESPACE}..."
+    NEW_CSV_NAME=""
+    CSV_CREATE_DEADLINE=$((SECONDS+60))
+    while [ ${SECONDS} -lt ${CSV_CREATE_DEADLINE} ]; do
+        current_csvs=$(oc get csv -n "${OPERATOR_NAMESPACE}" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null || true)
+        for name in ${current_csvs}; do
+            case " ${existing_csvs} " in
+                *" ${name} "*) ;; # existed before
+                *) NEW_CSV_NAME="${name}"; break ;;
+            esac
+        done
+        [ -n "${NEW_CSV_NAME}" ] && break
+        sleep 2
+    done
+
+    if [ -n "${NEW_CSV_NAME}" ]; then
+        echo "Detected new CSV: ${NEW_CSV_NAME}. Waiting for phase Succeeded (120s timeout)..."
+        if ! oc wait --for=jsonpath='{.status.phase}'=Succeeded "csv/${NEW_CSV_NAME}" -n "${OPERATOR_NAMESPACE}" --timeout=120s; then
+            echo "Warning: CSV ${NEW_CSV_NAME} did not reach 'Succeeded' phase in time. Check 'oc get csv ${NEW_CSV_NAME} -n ${OPERATOR_NAMESPACE} -o yaml'."
+        fi
+    else
+        echo "Warning: No new CSV detected within 60s. Proceeding to wait on any CSV in namespace."
+        if ! oc wait --for=jsonpath='{.status.phase}'=Succeeded csv --all -n "${OPERATOR_NAMESPACE}" --timeout=120s; then
+            echo "Warning: No CSV reached 'Succeeded' phase in time. Check 'oc get csv -n ${OPERATOR_NAMESPACE}'."
+        fi
     fi
 fi
+# Step 15c: Final verification and status reporting
+echo "Step 15c: Final verification and status reporting..."
+echo ""
+echo "📊 Current CSV status:"
 oc get csv -n "${OPERATOR_NAMESPACE}"
 echo ""
 
+echo "📊 Current operator pods:"
+oc get pods -n "${OPERATOR_NAMESPACE}" 2>/dev/null || echo "No pods found in ${OPERATOR_NAMESPACE}"
+echo ""
+
+echo "📊 Subscription status:"
+oc get subscription "subscription-${OPERATOR_NAME}" -n "${OPERATOR_NAMESPACE}" -o custom-columns="NAME:.metadata.name,PACKAGE:.spec.name,SOURCE:.spec.source,CHANNEL:.spec.channel,CURRENT_CSV:.status.currentCSV,STATE:.status.state" 2>/dev/null || echo "Subscription status unavailable"
+echo ""
+
+# Check if operator pods are running
+OPERATOR_PODS_READY=$(oc get pods -n "${OPERATOR_NAMESPACE}" -o jsonpath='{.items[*].status.containerStatuses[*].ready}' 2>/dev/null | grep -o "true" | wc -l || echo "0")
+TOTAL_OPERATOR_PODS=$(oc get pods -n "${OPERATOR_NAMESPACE}" --no-headers 2>/dev/null | wc -l || echo "0")
+
+if [ "${TOTAL_OPERATOR_PODS}" -gt 0 ] && [ "${OPERATOR_PODS_READY}" -eq "${TOTAL_OPERATOR_PODS}" ]; then
+    echo "🎉 SUCCESS: ${OPERATOR_NAME} operator installation completed successfully!"
+    echo "✅ All ${TOTAL_OPERATOR_PODS} operator pods are running and ready"
+else
+    echo "⚠️  WARNING: ${OPERATOR_NAME} operator installation may have issues:"
+    echo "   - Total pods: ${TOTAL_OPERATOR_PODS}"
+    echo "   - Ready pods: ${OPERATOR_PODS_READY}"
+    echo "   Please check pod status and logs for issues."
+fi
+
+echo ""
+echo "🔍 Verification commands:"
+echo "   Check operator status: oc get pods -n ${OPERATOR_NAMESPACE}"
+echo "   Check CSV status: oc get csv -n ${OPERATOR_NAMESPACE}"
+echo "   Check subscription: oc get subscription -n ${OPERATOR_NAMESPACE}"
+echo "   Check operator logs: oc logs -n ${OPERATOR_NAMESPACE} -l app.kubernetes.io/name=${OPERATOR_NAME}-operator --tail=50"
+echo ""
 echo "${OPERATOR_NAME} operator installation script finished."
-echo "You can check the operator's status with: oc get pods -n ${OPERATOR_NAMESPACE}"
-echo "And CSV status with: oc get csv -n ${OPERATOR_NAMESPACE}"
